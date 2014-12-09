@@ -125,14 +125,17 @@ int chtod(char ch) {
 long long stringToIntWithRadix(const char *s, int forceRadix, bool *hasError) {
   // skip whitespace (strange parseInt behaviour)
   while (isWhitespace(*s)) s++;
-  const char *numberStart = s;
 
   bool isNegated = false;
   long long v = 0;
   if (*s == '-') {
     isNegated = true;
     s++;
+  } else if (*s == '+') {
+    s++;
   }
+
+  const char *numberStart = s;
 
   int radix = getRadix(&s, forceRadix, hasError);
   if (!radix) return 0;
@@ -307,18 +310,24 @@ unsigned int rand() {
 JsVarFloat stringToFloatWithRadix(const char *s, int forceRadix) {
   // skip whitespace (strange parseFloat behaviour)
   while (isWhitespace(*s)) s++;
+
+  bool isNegated = false;
+  if (*s == '-') {
+    isNegated = true;
+    s++;
+  } else if (*s == '+') {
+    s++;
+  }
+
   const char *numberStart = s;
 
   int radix = getRadix(&s, forceRadix, 0);
   if (!radix) return NAN;
 
-  bool isNegated = false;
+
   JsVarFloat v = 0;
   JsVarFloat mul = 0.1;
-  if (*s == '-') {
-    isNegated = true;
-    s++;
-  }
+
   // handle integer part
   while (*s) {
     int digit = chtod(*s);
@@ -370,7 +379,7 @@ JsVarFloat stringToFloatWithRadix(const char *s, int forceRadix) {
     }
   }
   // check that we managed to parse something at least
-  if (numberStart==s) return NAN;
+  if (numberStart==s || (numberStart[0]=='.' && numberStart[1]==0)) return NAN;
 
   if (isNegated) return -v;
   return v;
@@ -386,10 +395,10 @@ char itoch(int val) {
   return (char)('a'+val-10);
 }
 
-void itostr(JsVarInt vals,char *str,unsigned int base) {
+void itostr_extra(JsVarInt vals,char *str,bool signedVal, unsigned int base) {
   JsVarIntUnsigned val;
   // handle negative numbers
-  if (vals<0) {
+  if (signedVal && vals<0) {
     *(str++)='-';
     val = (JsVarIntUnsigned)(-vals);
   } else {
@@ -508,11 +517,12 @@ void vcbprintf(vcbprintf_callback user_callback, void *user_data, const char *fm
         break;
       }
       case 'd': itostr(va_arg(argp, int), buf, 10); user_callback(buf,user_data); break;
-      case 'x': itostr(va_arg(argp, int), buf, 16); user_callback(buf,user_data); break;
+      case 'x': itostr_extra(va_arg(argp, int), buf, false, 16); user_callback(buf,user_data); break;
       case 'L': {
         unsigned int rad = 10;
-        if (*fmt=='x') { rad=16; fmt++; }
-        itostr(va_arg(argp, JsVarInt), buf, rad); user_callback(buf,user_data);
+        bool signedVal = true;
+        if (*fmt=='x') { rad=16; fmt++; signedVal = false; }
+        itostr_extra(va_arg(argp, JsVarInt), buf, signedVal, rad); user_callback(buf,user_data);
       } break;
       case 'f': ftoa_bounded(va_arg(argp, JsVarFloat), buf, sizeof(buf)); user_callback(buf,user_data);  break;
       case 's': user_callback(va_arg(argp, char *), user_data); break;

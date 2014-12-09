@@ -32,8 +32,27 @@ typedef struct {
   unsigned char data;         // data to transmit
 } PACKED_FLAGS TxBufferItem;
 
-TxBufferItem txBuffer[TXBUFFERMASK+1];
+volatile TxBufferItem txBuffer[TXBUFFERMASK+1];
 volatile unsigned char txHead=0, txTail=0;
+
+typedef enum {
+  SDS_NONE,
+  SDS_XOFF_PENDING = 1,
+  SDS_XON_PENDING = 2,
+  SDS_XOFF_SENT = 4, // sending XON clears this
+  SDS_FLOW_CONTROL_XON_XOFF = 8, // flow control enabled
+} PACKED_FLAGS JshSerialDeviceState;
+JshSerialDeviceState jshSerialDeviceStates[USARTS+1];
+
+// ----------------------------------------------------------------------------
+
+void jshInitDevices() { // called from jshInit
+  int i;
+  jshSerialDeviceStates[0] = SDS_FLOW_CONTROL_XON_XOFF; // USB
+  for (i=1;i<=USARTS;i++)
+    jshSerialDeviceStates[i] = SDS_NONE;
+}
+
 // ----------------------------------------------------------------------------
 
 // Queue a character for transmission
@@ -46,6 +65,13 @@ void jshTransmit(IOEventFlags device, unsigned char data) {
 #ifdef USB
   if (device==EV_USBSERIAL && !jshIsUSBSERIALConnected()) {
     jshTransmitClearDevice(EV_USBSERIAL); // clear out stuff already waiting
+    return;
+  }
+#endif
+#else // if PC, just put to stdout
+  if (device==DEFAULT_CONSOLE_DEVICE) {
+    fputc(data, stdout);
+    fflush(stdout);
     return;
   }
 #endif
@@ -67,17 +93,28 @@ void jshTransmit(IOEventFlags device, unsigned char data) {
   txHead = txHeadNext;
 
   jshUSARTKick(device); // set up interrupts if required
+}
 
-#else // if PC, just put to stdout
-  if (device==DEFAULT_CONSOLE_DEVICE) {
-    fputc(data, stdout);
-    fflush(stdout);
-  }
-#endif
+// Return the device at the top of the transmit queue (or EV_NONE)
+IOEventFlags jshGetDeviceToTransmit() {
+  if (!jshHasTransmitData()) return EV_NONE;
+  return IOEVENTFLAGS_GETTYPE(txBuffer[txTail].flags);
 }
 
 // Try and get a character for transmission - could just return -1 if nothing
 int jshGetCharToTransmit(IOEventFlags device) {
+  if (DEVICE_IS_USART(device)) {
+    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[device-EV_USBSERIAL];
+    if ((*deviceState)&SDS_XOFF_PENDING) {
+      (*deviceState) = ((*deviceState)&(~SDS_XOFF_PENDING)) | SDS_XOFF_SENT;
+      return 19/*XOFF*/;
+    }
+    if ((*deviceState)&SDS_XON_PENDING) {
+      (*deviceState) = ((*deviceState)&(~(SDS_XON_PENDING|SDS_XOFF_SENT)));
+      return 17/*XON*/;
+    }
+  }
+
   unsigned char ptr = txTail;
   while (txHead != ptr) {
     if (IOEVENTFLAGS_GETTYPE(txBuffer[ptr].flags) == device) {
@@ -112,16 +149,12 @@ void jshTransmitClearDevice(IOEventFlags device) {
 }
 
 bool jshHasTransmitData() {
-#ifndef LINUX
   return txHead != txTail;
-#else
-  return false;
-#endif
 }
 
 // ----------------------------------------------------------------------------
 //                                                              IO EVENT BUFFER
-IOEvent ioBuffer[IOBUFFERMASK+1];
+volatile IOEvent ioBuffer[IOBUFFERMASK+1];
 volatile unsigned char ioHead=0, ioTail=0;
 // ----------------------------------------------------------------------------
 
@@ -135,9 +168,6 @@ void jshIOEventOverflowed() {
 void jshPushIOCharEvent(IOEventFlags channel, char charData) {
   if (charData==3 && channel==jsiGetConsoleDevice()) {
     // Ctrl-C - force interrupt
-#ifdef LINUX
-    raise(SIGINT);
-#endif
     execInfo.execute |= EXEC_CTRL_C;
     return;
   }
@@ -145,6 +175,7 @@ void jshPushIOCharEvent(IOEventFlags channel, char charData) {
     jshSetFlowControlXON(channel, false);
   // Check for existing buffer (we must have at least 2 in the queue to avoid dropping chars though!)
   unsigned char nextTail = (unsigned char)((ioTail+1) & IOBUFFERMASK);
+#ifndef LINUX // no need for this on linux, and also potentially dodgy when multi-threading
   if (ioHead!=ioTail && ioHead!=nextTail) {
     // we can do this because we only read in main loop, and we're in an interrupt here
     unsigned char lastHead = (unsigned char)((ioHead+IOBUFFERMASK) & IOBUFFERMASK); // one behind head
@@ -157,6 +188,7 @@ void jshPushIOCharEvent(IOEventFlags channel, char charData) {
       return;
     }
   }
+#endif
   // Make new buffer
   unsigned char nextHead = (unsigned char)((ioHead+1) & IOBUFFERMASK);
   if (ioTail == nextHead) {
@@ -182,7 +214,6 @@ void jshPushIOWatchEvent(IOEventFlags channel) {
 }
 
 void jshPushIOEvent(IOEventFlags channel, JsSysTime time) {
-
   unsigned char nextHead = (unsigned char)((ioHead+1) & IOBUFFERMASK);
   if (ioTail == nextHead) {
     jshIOEventOverflowed();
@@ -199,6 +230,28 @@ bool jshPopIOEvent(IOEvent *result) {
   *result = ioBuffer[ioTail];
   ioTail = (unsigned char)((ioTail+1) & IOBUFFERMASK);
   return true;
+}
+
+// returns true on success
+bool jshPopIOEventOfType(IOEventFlags eventType, IOEvent *result) {
+  unsigned char i = ioTail;
+  while (ioHead!=i) {
+    if (IOEVENTFLAGS_GETTYPE(ioBuffer[i].flags) == eventType) {
+      *result = ioBuffer[i];
+      // work back and shift all items in out queue
+      unsigned char n = (unsigned char)((i+IOBUFFERMASK) & IOBUFFERMASK);
+      while (n!=ioTail) {
+        ioBuffer[i] = ioBuffer[n];
+        i = n;
+        n = (unsigned char)((n+IOBUFFERMASK) & IOBUFFERMASK);
+      }
+      // finally update the tail pointer, and return
+      ioTail = (unsigned char)((ioTail+1) & IOBUFFERMASK);
+      return true;
+    }
+    i = (unsigned char)((i+1) & IOBUFFERMASK);
+  }
+  return false;
 }
 
 bool jshHasEvents() {
@@ -319,7 +372,41 @@ IOEventFlags jshFromDeviceString(const char *device) {
 
 /// Set whether the host should transmit or not
 void jshSetFlowControlXON(IOEventFlags device, bool hostShouldTransmit) {
-  NOT_USED(device);
-  NOT_USED(hostShouldTransmit);
+  if (DEVICE_IS_USART(device)) {
+    JshSerialDeviceState *deviceState = &jshSerialDeviceStates[device-EV_USBSERIAL];
+    if ((*deviceState) & SDS_FLOW_CONTROL_XON_XOFF) {
+      if (hostShouldTransmit) {
+        if (((*deviceState)&(SDS_XOFF_SENT|SDS_XON_PENDING)) == SDS_XOFF_SENT) {
+          jshInterruptOff();
+          (*deviceState) |= SDS_XON_PENDING;
+          jshInterruptOn();
+          jshUSARTKick(device);
+        }
+      } else { // !hostShouldTransmit
+        if (((*deviceState)&(SDS_XOFF_SENT|SDS_XOFF_PENDING)) == 0) {
+          jshInterruptOff();
+          (*deviceState) |= SDS_XOFF_PENDING;
+          jshInterruptOn();
+          jshUSARTKick(device);
+        }
+      }
+    }
+  }
 }
 
+/// Gets a device's object from a device, or return 0 if it doesn't exist
+JsVar *jshGetDeviceObject(IOEventFlags device) {
+  const char *deviceStr = jshGetDeviceString(device);
+  if (!deviceStr) return 0;
+  return jsvObjectGetChild(execInfo.root, deviceStr, 0);
+}
+
+/// Set whether to use flow control on the given device or not
+void jshSetFlowControlEnabled(IOEventFlags device, bool xOnXOff) {
+  if (!DEVICE_IS_USART(device)) return;
+  JshSerialDeviceState *deviceState = &jshSerialDeviceStates[device-EV_USBSERIAL];
+  if (xOnXOff)
+    (*deviceState) |= SDS_FLOW_CONTROL_XON_XOFF;
+  else
+    (*deviceState) &= ~SDS_FLOW_CONTROL_XON_XOFF;
+}

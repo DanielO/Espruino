@@ -35,7 +35,7 @@ extern int isfinite ( double );
 #endif
 
 
-#define JS_VERSION "1v70"
+#define JS_VERSION "1v72"
 /*
   In code:
   TODO - should be fixed
@@ -161,9 +161,9 @@ typedef long long JsSysTime;
 // internal names that hopefully nobody will be able to access
 #define JS_HIDDEN_CHAR '>' // initial character of var name determines that we shouldn't see this stuff
 #define JS_HIDDEN_CHAR_STR ">"
-#define JSPARSE_FUNCTION_CODE_NAME JS_HIDDEN_CHAR_STR"code" // the function's code!
-#define JSPARSE_FUNCTION_SCOPE_NAME JS_HIDDEN_CHAR_STR"scope" // the scope of the function's definition
-#define JSPARSE_FUNCTION_NAME_NAME JS_HIDDEN_CHAR_STR"name" // for named functions (a = function foo() { foo(); })
+#define JSPARSE_FUNCTION_CODE_NAME JS_HIDDEN_CHAR_STR"cod" // the function's code!
+#define JSPARSE_FUNCTION_SCOPE_NAME JS_HIDDEN_CHAR_STR"sco" // the scope of the function's definition
+#define JSPARSE_FUNCTION_NAME_NAME JS_HIDDEN_CHAR_STR"nam" // for named functions (a = function foo() { foo(); })
 #define JSPARSE_EXCEPTION_VAR "except" // when exceptions are thrown, they're stored in the root scope
 #define JSPARSE_STACKTRACE_VAR "sTrace" // for errors/exceptions, a stack trace is stored as a string
 #define JSPARSE_MODULE_CACHE_NAME "modules"
@@ -183,6 +183,12 @@ typedef long long JsSysTime;
 
 /// Used before functions that we want to ensure are not inlined (eg. "void NO_INLINE foo() {}")
 #define NO_INLINE __attribute__ ((noinline))
+/// Put before functions that we always want inlined
+#ifndef SAVE_ON_FLASH
+#define ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+#define ALWAYS_INLINE inline
+#endif
 
 /// Maximum amount of locks we ever expect to have on a variable (this could limit recursion) must be 2^n-1
 #define JSV_LOCK_MAX  15
@@ -417,7 +423,11 @@ unsigned int rand();
 JsVarFloat stringToFloatWithRadix(const char *s, int forceRadix);
 JsVarFloat stringToFloat(const char *str);
 
-void itostr(JsVarInt val,char *str,unsigned int base); // like itoa, but uses JsVarInt (good on non-32 bit systems)
+void itostr_extra(JsVarInt vals,char *str,bool signedVal,unsigned int base); // like itoa, but uses JsVarInt (good on non-32 bit systems)
+static inline void itostr(JsVarInt val,char *str,unsigned int base) {
+    itostr_extra(val, str, true, base);
+}
+
 char itoch(int val);
 
 // super ftoa that does fixed point and radix

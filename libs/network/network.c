@@ -20,6 +20,9 @@
 #if defined(USE_WIZNET)
   #include "network_wiznet.h"
 #endif
+#if defined(USE_ESP8266)
+  #include "network_esp8266.h"
+#endif
 #if defined(LINUX)
   #include "network_linux.h"
 #endif
@@ -31,6 +34,8 @@ JsNetworkState networkState =
     NETWORKSTATE_OFFLINE
 #endif
     ;
+
+JsNetwork *networkCurrentStruct = 0;
 
 unsigned long networkParseIPAddress(const char *ip) {
   int n = 0;
@@ -50,7 +55,7 @@ unsigned long networkParseIPAddress(const char *ip) {
   return addr;
 }
 
-void networkPutAddressAsString(JsVar *object, const char *name,  unsigned char *ip, int nBytes, unsigned int base, char separator) {
+JsVar *networkGetAddressAsString(unsigned char *ip, int nBytes, unsigned int base, char separator) {
   char data[64] = "";
   int i = 0, dir = 1, l = 0;
   if (nBytes<0) {
@@ -72,8 +77,11 @@ void networkPutAddressAsString(JsVar *object, const char *name,  unsigned char *
     }
   }
 
-  JsVar *dataVar = jsvNewFromString(data);
-  jsvUnLock(jsvObjectSetChild(object, name, dataVar));
+  return jsvNewFromString(data);
+}
+
+void networkPutAddressAsString(JsVar *object, const char *name,  unsigned char *ip, int nBytes, unsigned int base, char separator) {
+  jsvUnLock(jsvObjectSetChild(object, name, networkGetAddressAsString(ip, nBytes, base, separator)));
 }
 
 /** Some devices (CC3000) store the IP address with the first element last, so we must flip it */
@@ -99,10 +107,25 @@ void networkGetHostByName(JsNetwork *net, char * hostName, unsigned long* out_ip
 
 void networkCreate(JsNetwork *net, JsNetworkType type) {
   net->networkVar = jsvNewStringOfLength(sizeof(JsNetworkData));
+  if (!net->networkVar) return;
   net->data.type = type;
+  net->data.device = EV_NONE;
+  net->data.pinCS = PIN_UNDEFINED;
+  net->data.pinIRQ = PIN_UNDEFINED;
+  net->data.pinEN = PIN_UNDEFINED;
   jsvUnLock(jsvObjectSetChild(execInfo.hiddenRoot, NETWORK_VAR_NAME, net->networkVar));
   networkSet(net);
   networkGetFromVar(net);
+}
+
+bool networkWasCreated() {
+  JsVar *v = jsvObjectGetChild(execInfo.hiddenRoot, NETWORK_VAR_NAME, 0);
+  if (v) {
+    jsvUnLock(v);
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool networkGetFromVar(JsNetwork *net) {
@@ -110,7 +133,7 @@ bool networkGetFromVar(JsNetwork *net) {
   if (!net->networkVar) {
 #ifdef LINUX
     networkCreate(net, JSNETWORKTYPE_SOCKET);
-    return true;
+    return net->networkVar != 0;
 #else
     return false;
 #endif
@@ -124,6 +147,9 @@ bool networkGetFromVar(JsNetwork *net) {
 #if defined(USE_WIZNET)
   case JSNETWORKTYPE_W5500 : netSetCallbacks_wiznet(net); break;
 #endif
+#if defined(USE_ESP8266)
+  case JSNETWORKTYPE_ESP8266 : netSetCallbacks_esp8266(net); break;
+#endif
 #if defined(LINUX)
   case JSNETWORKTYPE_SOCKET : netSetCallbacks_linux(net); break;
 #endif
@@ -132,6 +158,7 @@ bool networkGetFromVar(JsNetwork *net) {
     networkFree(net);
     return false;
   }
+  networkCurrentStruct = net;
   return true;
 }
 
@@ -150,5 +177,10 @@ void networkSet(JsNetwork *net) {
 }
 
 void networkFree(JsNetwork *net) {
+  networkCurrentStruct = 0;
   jsvUnLock(net->networkVar);
+}
+
+JsNetwork *networkGetCurrent() {
+  return networkCurrentStruct;
 }

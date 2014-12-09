@@ -32,6 +32,8 @@ IOEventFlags pinToEVEXTI(Pin pin) {
 
 // ----------------------------------------------------------------------------
 void jshInit() {
+  jshInitDevices();
+  Serial.begin(DEFAULT_BAUD_RATE);
 }
 
 void jshReset() {
@@ -104,6 +106,9 @@ JsVarFloat jshGetMillisecondsFromTime(JsSysTime time) {
 
 JsSysTime jshGetSystemTime() {
   return 0;
+}
+
+void jshSetSystemTime(JsSysTime time) {
 }
 
 // ----------------------------------------------------------------------------
@@ -182,7 +187,6 @@ void jshUSARTKick(IOEventFlags device) {
    int c;
    while ((c = jshGetCharToTransmit(EV_SERIAL1)) >= 0) {
       Serial.write((char)c);
-      Serial.print(":");
    }  
 }
 
@@ -203,6 +207,10 @@ void jshSPISend16(IOEventFlags device, int data) {
 
 /** Set whether to send 16 bits or 8 over SPI */
 void jshSPISet16(IOEventFlags device, bool is16) {
+}
+
+/** Wait until SPI send is finished, */
+void jshSPIWait(IOEventFlags device) {
 }
 
 void jshI2CSetup(IOEventFlags device, JshI2CInfo *inf) {
@@ -240,5 +248,8 @@ void jshUtilTimerReschedule(JsSysTime period) {
 
 void jshUtilTimerStart(JsSysTime period) {
 }
+
+JsVarFloat jshReadTemperature() { return NAN; };
+JsVarFloat jshReadVRef()  { return NAN; };
 
 }

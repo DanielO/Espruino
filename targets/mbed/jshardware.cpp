@@ -58,6 +58,7 @@ void mbedSerialIRQ(uint32_t id, SerialIrq event) {
 // ----------------------------------------------------------------------------
 // for non-blocking IO
 void jshInit() {
+  jshInitDevices();
   systemTimeWasHigh = false;
   systemTimeHigh = 0;
   systemTime.start();
@@ -149,6 +150,9 @@ JsSysTime jshGetSystemTime() {
   // FIXME - time after 30 minutes!
   
   return ((JsSysTime)t);// + ((JsSysTime)systemTimeHigh)<<32;
+}
+
+void jshSetSystemTime(JsSysTime time) {
 }
 
 // ----------------------------------------------------------------------------
@@ -246,6 +250,9 @@ void jshUtilTimerReschedule(JsSysTime period) {
 
 void jshUtilTimerStart(JsSysTime period) {
 }
+
+JsVarFloat jshReadTemperature() { return NAN; };
+JsVarFloat jshReadVRef()  { return NAN; };
 
 // ----------------------------------------------------------------------------
 } // extern C

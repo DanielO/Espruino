@@ -1,3 +1,38 @@
+     1v72 : Stop RTC being reset by hard reset (getTime will now be time since power first applied) (fix #412)
+            Allow Function.apply to take typed arrays (fix #442)
+            Allow arrays to be passed to digitalPulse so square waves can be created easily
+            Force inlining of jsvLock/UnLock on most systems - improves performance a lot
+            Fix issues with SPI.write, CS, and out of sync receive bytes
+            Fix do..while without trailing semi-colon
+            Ensure that &,|,^,etc all have different precedences (without extra recursion)
+            Used new semi-recursive parse for expressions
+            Fix filled column when fillpoly is off the end of the screen
+            Fixed reporting of Serial RX pullup in `dump()`
+            Add input thread on Linux, and fix idle and Ctrl+C behaviour (fix #451)
+            Stop huge amounts of input events blocking Espruino's timers (fix #452)
+            Add ability to use serial ports on Linux with Serial1.setup({path:"/dev/ttyUSB0"})
+            Started ability to use SPI from Linux
+            Added 'net' library with support for sockets
+            Fix JSON parse of negative numbers (fix #456)
+            Only keep RTC settings if the relevant oscillator is running (fix #444)
+            Finally fixed sporadic compilation problems with '-Os'
+
+     1v71 : Allowed WIZnet + CC3000 to be instantiated on any pins
+            Fix break inside loop inside case inside function (fix 428)
+            Added fs.stat and File.seek (fix #429, fix #430)
+            Allow use of DLE (char 16) on an empty line to turn echo off for *just that line*
+            Add XON/XOFF flow control on Serial + USB. This is enabled by default for Serial (fix #20)
+            Fix irregular timing on Espruino boards with clock crystal (inc rev 1v4)
+            Sort out 'Number()' constructor not being picky enough - parseFloat now parses 'Infinity' (Fix #325, mostly fix #322)
+            Stop iterator in FOR loop being called once more after a break
+            Fix bug allObjects found with iterating over undefined
+            Fix ArrayBuffer.sort issue with element size >1
+            Fix network de-initialisation on Linux
+            Fix reference count issue caused by removing a timer that had already been removed
+            Power up SYSCFG on F2/3/4 parts, allowing watch to work on ports other than A
+            Wait after setting the RTC time, to allow registers to update (fix #438, fix #441)
+            Now using gcc-arm-none-eabi-4_8-2014q3 for compilation - CodeSourcery stopped being supported
+
      1v70 : Make pipe remove its drain/close listeners. Stops out of memory for repeated piping.
             Fix parseInt for values too large to go in an int (#406)
             Fix integer maths when result is too large for an integer
@@ -11,6 +46,18 @@
             Add `E.unmountSD()` to allow SD cards to be removed once they have been used
             Stop String.split("") adding an empty elementy to the array
             Tidy up linker script, allow F401 to use 3x16kB pages for storing program data
+            Fix regression in long timeouts (fix #416)
+            Use 'interval' var to specify if we're an interval or not (don't use 'recur' var)
+            Stop while/for/etc resetting exception state (fix #419)
+            Add  E.getSizeOf (fix #421)
+            Fix jsvCountJsVarsUsed for names with values
+            Make hidden names smaller to save a few JsVars
+            If there's only one function scope, don't define an array and save 2 JsVars
+            Fix setInterval on non-F1 boards (fix #415)
+            Fix issue where large doubles (> +/- 2^31) were converted to -1 rather than truncated ints
+            Fix E.getSizeOf (fix #424)
+            Fixed JSON indentation issue
+            Made 'pretty' JSON output look a bit better
 
      1v69 : Fix 1v67's regression of digitalPulse when doing lots of pulses
             Add configurable OneWire search command (for finding DS18B20s with alarm set)

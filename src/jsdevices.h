@@ -16,6 +16,9 @@
 
 #include "jsutils.h"
 #include "platform_config.h"
+#include "jsvar.h"
+
+void jshInitDevices(); // called from jshInit
 
 typedef enum {
  // device type
@@ -98,6 +101,7 @@ static inline void jshPushIOCharEvents(IOEventFlags channel, char *data, unsigne
   for (i=0;i<count;i++) jshPushIOCharEvent(channel, data[i]);
 }
 bool jshPopIOEvent(IOEvent *result); ///< returns true on success
+bool jshPopIOEventOfType(IOEventFlags eventType, IOEvent *result); ///< returns true on success
 /// Do we have any events pending? Will jshPopIOEvent return true?
 bool jshHasEvents();
 /// Check if the top event is for the given device
@@ -112,6 +116,9 @@ bool jshHasEventSpaceForChars(int n);
 const char *jshGetDeviceString(IOEventFlags device);
 IOEventFlags jshFromDeviceString(const char *device);
 
+/// Gets a device's object from a device, or return 0 if it doesn't exist
+JsVar *jshGetDeviceObject(IOEventFlags device);
+
 // ----------------------------------------------------------------------------
 //                                                         DATA TRANSMIT BUFFER
 /// Queue a character for transmission
@@ -122,11 +129,16 @@ void jshTransmitFlush();
 void jshTransmitClearDevice(IOEventFlags device);
 /// Do we have anything we need to send?
 bool jshHasTransmitData();
+// Return the device at the top of the transmit queue (or EV_NONE)
+IOEventFlags jshGetDeviceToTransmit();
 /// Try and get a character for transmission - could just return -1 if nothing
 int jshGetCharToTransmit(IOEventFlags device);
 
 
 /// Set whether the host should transmit or not
 void jshSetFlowControlXON(IOEventFlags device, bool hostShouldTransmit);
+
+/// Set whether to use flow control on the given device or not
+void jshSetFlowControlEnabled(IOEventFlags device, bool xOnXOff);
 
 #endif /* JSDEVICES_H_ */

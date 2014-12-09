@@ -27,13 +27,6 @@
 #endif
 
 // ----------------------------------------------------------------------------
-typedef struct TimerState {
-  JsSysTime time;
-  JsSysTime interval;
-  bool recurring;
-  JsVarRef callback; // a calback, or 0
-} TimerState;
-
 typedef enum {
  IS_NONE,
  IS_HAD_R,
@@ -46,7 +39,7 @@ typedef enum {
  IS_HAD_27_91_52,
  IS_HAD_27_91_53,
  IS_HAD_27_91_54,
-} InputState;
+} PACKED_FLAGS InputState;
 
 TODOFlags todo = TODO_NOTHING;
 JsVar *events = 0; // Array of events to execute
@@ -56,8 +49,7 @@ JsVarRef watchArray = 0; // Linked List of input watches to check and run
 IOEventFlags consoleDevice = DEFAULT_CONSOLE_DEVICE; ///< The console device for user interaction
 Pin pinBusyIndicator = DEFAULT_BUSY_PIN_INDICATOR;
 Pin pinSleepIndicator = DEFAULT_SLEEP_PIN_INDICATOR;
-bool echo;                  ///< do we provide any user feedback?
-bool allowDeepSleep;
+JsiStatus jsiStatus;
 JsSysTime jsiLastIdleTime;  ///< The last time we went around the idle loop - use this for timers
 // ----------------------------------------------------------------------------
 JsVar *inputLine = 0; ///< The current input line
@@ -87,8 +79,12 @@ JsVar *jsiGetClassNameFromDevice(IOEventFlags device) {
   return jsvFindChildFromString(execInfo.root, deviceName, false);
 }
 
-static inline bool jsiShowInputLine() {
-  return echo && !inputLineRemoved;
+NO_INLINE bool jsiEcho() {
+  return ((jsiStatus&JSIS_ECHO_OFF_MASK)==0);
+}
+
+static bool jsiShowInputLine() {
+  return jsiEcho() && !inputLineRemoved;
 }
 
 /// Called when the input line/cursor is modified *and its iterator should be reset*
@@ -126,14 +122,14 @@ void jsiSetConsoleDevice(IOEventFlags device) {
   }
 
   jsiConsoleRemoveInputLine();
-  if (echo) { // intentionally not using jsiShowInputLine()
+  if (jsiEcho()) { // intentionally not using jsiShowInputLine()
     jsiConsolePrint("Console Moved to ");
     jsiConsolePrint(jshGetDeviceString(device));
     jsiConsolePrint("\n");
   }
   IOEventFlags oldDevice = consoleDevice;
   consoleDevice = device;
-  if (echo) { // intentionally not using jsiShowInputLine()
+  if (jsiEcho()) { // intentionally not using jsiShowInputLine()
     jsiConsolePrint("Console Moved from ");
     jsiConsolePrint(jshGetDeviceString(oldDevice));
     jsiConsolePrint("\n");
@@ -296,7 +292,7 @@ void jsiMoveCursorChar(JsVar *v, size_t fromCharacter, size_t toCharacter) {
 void jsiConsoleRemoveInputLine() {
   if (!inputLineRemoved) {
     inputLineRemoved = true;
-    if (echo && inputLine) { // intentionally not using jsiShowInputLine()
+    if (jsiEcho() && inputLine) { // intentionally not using jsiShowInputLine()
       jsiMoveCursorChar(inputLine, inputCursorPos, 0);
       jsiConsoleEraseStringVarFrom(inputLine, 0, true);
       jsiConsolePrintChar(0x08); // go back to start of line
@@ -308,7 +304,7 @@ void jsiConsoleRemoveInputLine() {
 void jsiReturnInputLine() {
   if (inputLineRemoved) {
     inputLineRemoved = false;
-    if (echo) { // intentionally not using jsiShowInputLine()
+    if (jsiEcho()) { // intentionally not using jsiShowInputLine()
       jsiConsolePrintChar('>'); // show the prompt
       jsiConsolePrintStringVarWithNewLineChar(inputLine, 0, ':');
       jsiMoveCursorChar(inputLine, jsvGetStringLength(inputLine), inputCursorPos);
@@ -381,7 +377,7 @@ void jsiSoftInit() {
   jsiInputLineCursorMoved();
   inputLineIterator.var = 0;
 
-  allowDeepSleep = false;
+  jsiStatus &= ~JSIS_ALLOW_DEEP_SLEEP;
 
   // Load timer/watch arrays
   timerArray = _jsiInitNamedArray(JSI_TIMERS_NAME);
@@ -418,7 +414,7 @@ void jsiSoftInit() {
   // And look for onInit function
   JsVar *onInit = jsvObjectGetChild(execInfo.root, JSI_ONINIT_NAME, 0);
   if (onInit) {
-    if (echo) jsiConsolePrint("Running onInit()...\n");
+    if (jsiEcho()) jsiConsolePrint("Running onInit()...\n");
     if (jsvIsFunction(onInit))
       jsvUnLock(jspExecuteFunction(onInit, 0, 0, (JsVar**)0));
     else if (jsvIsString(onInit))
@@ -482,14 +478,14 @@ void jsiAppendDeviceInitialisation(JsVar *str, const char *deviceName) {
 
 /** Append all the code required to initialise hardware to this string */
 void jsiAppendHardwareInitialisation(JsVar *str, bool addCallbacks) {
-  if (!echo) jsvAppendString(str, "echo(0);");
+  if (jsiStatus&JSIS_ECHO_OFF) jsvAppendString(str, "echo(0);");
   if (pinBusyIndicator != DEFAULT_BUSY_PIN_INDICATOR) {
     jsvAppendPrintf(str, "setBusyIndicator(%p);\n", pinBusyIndicator);
   }
   if (pinSleepIndicator != DEFAULT_BUSY_PIN_INDICATOR) {
     jsvAppendPrintf(str, "setSleepIndicator(%p);\n", pinSleepIndicator);
   }
-  if (allowDeepSleep) {
+  if (jsiStatus&JSIS_ALLOW_DEEP_SLEEP) {
     jsvAppendPrintf(str, "setDeepSleep(1);\n");
   }
 
@@ -512,6 +508,11 @@ void jsiAppendHardwareInitialisation(JsVar *str, bool addCallbacks) {
       if (!isOn && IS_PIN_A_LED(pin)) continue;
       jsvAppendPrintf(str, "digitalWrite(%p,%d);\n",pin,isOn?1:0);
     } else if (/*statem == JSHPINSTATE_GPIO_IN ||*/statem == JSHPINSTATE_GPIO_IN_PULLUP || statem == JSHPINSTATE_GPIO_IN_PULLDOWN) {
+#ifdef DEFAULT_CONSOLE_RX_PIN
+      // the console input pin is always a pullup now - which is expected
+      if (pin == DEFAULT_CONSOLE_RX_PIN &&
+          statem == JSHPINSTATE_GPIO_IN_PULLUP) continue;
+#endif
       // don't bother with normal inputs, as they come up in this state (ish) anyway
       const char *s = "";
       if (statem == JSHPINSTATE_GPIO_IN_PULLUP) s="_pullup";
@@ -581,7 +582,7 @@ void jsiInit(bool autoLoad) {
   // Set state
   interruptedDuringEvent = false;
   // Set defaults
-  echo = true;
+  jsiStatus = JSIS_NONE;
   consoleDevice = DEFAULT_CONSOLE_DEVICE;
   pinBusyIndicator = DEFAULT_BUSY_PIN_INDICATOR;
   if (jshIsUSBSERIALConnected())
@@ -601,7 +602,7 @@ void jsiInit(bool autoLoad) {
   // Softinit may run initialisation code that will overwrite defaults
   jsiSoftInit();
 
-  if (echo) { // intentionally not using jsiShowInputLine()
+  if (jsiEcho()) { // intentionally not using jsiShowInputLine()
     if (!loadFlash) {
       jsiConsolePrint(
 #ifndef LINUX
@@ -875,13 +876,15 @@ void jsiHandleNewLine(bool execute) {
       jsiHistoryAddLine(lineToExecute);
       jsvUnLock(lineToExecute);
       // print result (but NOT if we had an error)
-      if (echo && !jspHasError()) {
+      if (jsiEcho() && !jspHasError()) {
         jsiConsolePrintChar('=');
         jsfPrintJSON(v, JSON_LIMIT | JSON_NEWLINES | JSON_PRETTY | JSON_SHOW_DEVICES);
         jsiConsolePrint("\n");
       }
       jsvUnLock(v);
       // console will be returned next time around the input loop
+      // if we had echo off just for this line, reinstate it!
+      jsiStatus &= ~JSIS_ECHO_OFF_FOR_LINE;
     } else {
       // Brackets aren't all closed, so we're going to append a newline
       // without executing
@@ -938,11 +941,11 @@ void jsiHandleChar(char ch) {
   } else if (ch == 1) { // Ctrl-a
     jsiHandleHome();
   } else if (ch == 4) { // Ctrl-d
-      jsiHandleDelete(false/*not backspace*/);
+    jsiHandleDelete(false/*not backspace*/);
   } else if (ch == 5) { // Ctrl-e
     jsiHandleEnd();
   } else if (ch == 21 || ch == 23) { // Ctrl-u or Ctrl-w
-      jsiClearInputLine();
+    jsiClearInputLine();
   } else if (ch == 27) {
     inputState = IS_HAD_27;
   } else if (inputState==IS_HAD_27) {
@@ -1033,6 +1036,11 @@ void jsiHandleChar(char ch) {
       if (ch==126) { // Page Down
         jsiHandlePageUpDown(1);
       }
+  } else if (ch==16 && jsvGetStringLength(inputLine)==0) {
+    /* DLE - Data Link Escape
+    Espruino uses DLE on the start of a line to signal that just the line in
+    question should be executed without echo */
+    jsiStatus  |= JSIS_ECHO_OFF_FOR_LINE;
   } else {  
     inputState = IS_NONE;
     if (ch == 0x08 || ch == 0x7F /*delete*/) {
@@ -1230,6 +1238,44 @@ bool jsiIsWatchingPin(Pin pin) {
   return isWatched;
 }
 
+void jsiHandleIOEventForUSART(JsVar *usartClass, IOEvent *event) {
+  /* work out byteSize. On STM32 we fake 7 bit, and it's easier to
+   * check the options and work out the masking here than it is to
+   * do it in the IRQ */
+  unsigned char bytesize = 8;
+  JsVar *options = jsvObjectGetChild(usartClass, DEVICE_OPTIONS_NAME, 0);
+  if(jsvIsObject(options)) {
+    unsigned char c = (unsigned char)jsvGetIntegerAndUnLock(jsvObjectGetChild(options, "bytesize", 0));
+    if (c>=7 && c<10) bytesize = c;
+  }
+  jsvUnLock(options);
+
+  JsVar *stringData = jsvNewFromEmptyString();
+  if (stringData) {
+    JsvStringIterator it;
+    jsvStringIteratorNew(&it, stringData, 0);
+
+    int i, chars = IOEVENTFLAGS_GETCHARS(event->flags);
+    while (chars) {
+      for (i=0;i<chars;i++) {
+        char ch = (char)(event->data.chars[i] & ((1<<bytesize)-1)); // mask
+        jsvStringIteratorAppend(&it, ch);
+      }
+      // look down the stack and see if there is more data
+      if (jshIsTopEvent(IOEVENTFLAGS_GETTYPE(event->flags))) {
+        jshPopIOEvent(event);
+        chars = IOEVENTFLAGS_GETCHARS(event->flags);
+      } else
+        chars = 0;
+    }
+    jsvStringIteratorFree(&it);
+
+    // Now run the handler
+    jswrap_stream_pushData(usartClass, stringData);
+    jsvUnLock(stringData);
+  }
+}
+
 void jsiIdle() {
   // This is how many times we have been here and not done anything.
   // It will be zeroed if we do stuff later
@@ -1238,7 +1284,8 @@ void jsiIdle() {
   // Handle hardware-related idle stuff (like checking for pin events)
   bool wasBusy = false;
   IOEvent event;
-  while (jshPopIOEvent(&event)) {
+  int maxEvents = IOBUFFERMASK+1; // ensure we can't get totally swamped by having more events than we can process
+  while (maxEvents-- && jshPopIOEvent(&event)) {
     jsiSetBusy(BUSY_INTERACTIVE, true);
     wasBusy = true;
 
@@ -1256,41 +1303,7 @@ void jsiIdle() {
       // ------------------------------------------------------------------------ SERIAL CALLBACK
       JsVar *usartClass = jsvSkipNameAndUnLock(jsiGetClassNameFromDevice(IOEVENTFLAGS_GETTYPE(event.flags)));
       if (jsvIsObject(usartClass)) {
-        /* work out byteSize. On STM32 we fake 7 bit, and it's easier to
-         * check the options and work out the masking here than it is to
-         * do it in the IRQ */
-        unsigned char bytesize = 8;
-        JsVar *options = jsvObjectGetChild(usartClass, DEVICE_OPTIONS_NAME, 0);
-        if(jsvIsObject(options)) {
-          unsigned char c = (unsigned char)jsvGetIntegerAndUnLock(jsvObjectGetChild(options, "bytesize", 0));
-          if (c>=7 && c<10) bytesize = c;
-        }
-        jsvUnLock(options);
-
-        JsVar *stringData = jsvNewFromEmptyString();
-        if (stringData) {
-          JsvStringIterator it;
-          jsvStringIteratorNew(&it, stringData, 0);
-
-          int i, chars = IOEVENTFLAGS_GETCHARS(event.flags);
-          while (chars) {
-            for (i=0;i<chars;i++) {
-              char ch = (char)(event.data.chars[i] & ((1<<bytesize)-1)); // mask
-              jsvStringIteratorAppend(&it, ch);
-            }
-            // look down the stack and see if there is more data
-            if (jshIsTopEvent(eventType)) {
-              jshPopIOEvent(&event);
-              chars = IOEVENTFLAGS_GETCHARS(event.flags);
-            } else
-              chars = 0;
-          }
-          jsvStringIteratorFree(&it);
-
-          // Now run the handler
-          jswrap_stream_pushData(usartClass, stringData);
-          jsvUnLock(stringData);
-        }
+        jsiHandleIOEventForUSART(usartClass, &event);
       }
       jsvUnLock(usartClass);
     } else if (DEVICE_IS_EXTI(eventType)) { // ---------------------------------------------------------------- PIN WATCH
@@ -1403,6 +1416,7 @@ void jsiIdle() {
 
   // Reset Flow control if it was set...
   if (jshGetEventsUsed() < IOBUFFER_XON) { 
+    jshSetFlowControlXON(EV_USBSERIAL, true);
     int i;
     for (i=0;i<USARTS;i++)
       jshSetFlowControlXON(EV_SERIAL1+i, true);
@@ -1411,7 +1425,7 @@ void jsiIdle() {
   // Check timers
   JsSysTime minTimeUntilNext = JSSYSTIME_MAX;
   JsSysTime time = jshGetSystemTime();
-  JsVarInt timePassed = (JsVarInt)(time - jsiLastIdleTime);
+  JsSysTime timePassed = (JsVarInt)(time - jsiLastIdleTime);
   jsiLastIdleTime = time;
 
   JsVar *timerArrayPtr = jsvLock(timerArray);
@@ -1420,8 +1434,8 @@ void jsiIdle() {
   while (jsvObjectIteratorHasValue(&it)) {
     bool hasDeletedTimer = false;
     JsVar *timerPtr = jsvObjectIteratorGetValue(&it);
-    JsVarInt timerTime = jsvGetIntegerAndUnLock(jsvObjectGetChild(timerPtr, "time", 0));
-    JsVarInt timeUntilNext = timerTime - timePassed;
+    JsSysTime timerTime = (JsSysTime)jsvGetLongIntegerAndUnLock(jsvObjectGetChild(timerPtr, "time", 0));
+    JsSysTime timeUntilNext = timerTime - timePassed;
 
     if (timeUntilNext < minTimeUntilNext)
       minTimeUntilNext = timeUntilNext;
@@ -1451,12 +1465,11 @@ void jsiIdle() {
         }
         jsvUnLock(jsvObjectSetChild(data, "time", timePtr));
       }
-      bool intervalRecurring = jsvGetBoolAndUnLock(jsvObjectGetChild(timerPtr, "recur", 0));
+      JsVar *interval = jsvObjectGetChild(timerPtr, "interval", 0);
       if (exec) {
-        if (!jsiExecuteEventCallback(timerCallback, data, 0) && intervalRecurring) {
+        if (!jsiExecuteEventCallback(timerCallback, data, 0) && interval) {
           jsError("Error processing interval - removing it.");
           jsErrorFlags |= JSERR_CALLBACK;
-          intervalRecurring = false;
         }
       }
       jsvUnLock(data);
@@ -1481,9 +1494,8 @@ void jsiIdle() {
         jsvUnLock(watchPtr);
       }
 
-      if (intervalRecurring) {
-        JsVarInt interval = jsvGetIntegerAndUnLock(jsvObjectGetChild(timerPtr, "interval", 0));
-        timeUntilNext = (interval<=0) ? 0 : (timerTime + interval);
+      if (interval) {
+        timeUntilNext = timeUntilNext + jsvGetLongIntegerAndUnLock(interval);
       } else {
         // free
         // Beware... may have already been removed!
@@ -1496,10 +1508,11 @@ void jsiIdle() {
 
     }
     // update the timer's time
-    jsvUnLock(jsvObjectSetChild(timerPtr, "time", jsvNewFromInteger(timeUntilNext)));
-    jsvUnLock(timerPtr);
-    if (!hasDeletedTimer)
+    if (!hasDeletedTimer) {
+      jsvUnLock(jsvObjectSetChild(timerPtr, "time", jsvNewFromLongInteger(timeUntilNext)));
       jsvObjectIteratorNext(&it);
+    }
+    jsvUnLock(timerPtr);
   }
   jsvObjectIteratorFree(&it);
   jsvUnLock(timerArrayPtr);
@@ -1612,6 +1625,9 @@ bool jsiLoop() {
   // If Ctrl-C was pressed, clear the line
   if (execInfo.execute & EXEC_CTRL_C_MASK) {
     execInfo.execute = execInfo.execute & (JsExecFlags)~EXEC_CTRL_C_MASK;
+#ifndef EMBEDDED
+    if (jsvIsEmptyString(inputLine)) exit(0); // exit if ctrl-c on empty input line
+#endif
     jsiClearInputLine();
   }
 
@@ -1730,11 +1746,11 @@ void jsiDumpState() {
   while (jsvObjectIteratorHasValue(&it)) {
     JsVar *timer = jsvObjectIteratorGetValue(&it);
     JsVar *timerCallback = jsvSkipOneNameAndUnLock(jsvFindChildFromString(timer, "callback", false));
-    bool recur = jsvGetBoolAndUnLock(jsvObjectGetChild(timer, "recur", 0));
-    JsSysTime timerInterval = (JsSysTime)jsvGetIntegerAndUnLock(jsvObjectGetChild(timer, "interval", 0));
-    jsiConsolePrint(recur ? "setInterval(" : "setTimeout(");
+    JsVar *timerInterval = jsvObjectGetChild(timer, "interval", 0);
+    jsiConsolePrint(timerInterval ? "setInterval(" : "setTimeout(");
     jsiDumpJSON(timerCallback, 0);
-    jsiConsolePrintf(", %f);\n", jshGetMillisecondsFromTime(timerInterval));
+    jsiConsolePrintf(", %f);\n", jshGetMillisecondsFromTime(timerInterval ? jsvGetLongInteger(timerInterval) : jsvGetLongIntegerAndUnLock(jsvObjectGetChild(timer, "time", 0))));
+    jsvUnLock(timerInterval);
     jsvUnLock(timerCallback);
     // next
     jsvUnLock(timer);

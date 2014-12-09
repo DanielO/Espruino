@@ -280,7 +280,20 @@ void RTCAlarm_IRQHandler(void) {
   EXTI_ClearITPendingBit(EXTI_Line17);
 }
 
-static inline void USART_IRQHandler(USART_TypeDef *USART, IOEventFlags device) {
+#ifdef STM32F4
+#include "stm32f4xx_rtc.h"
+#include "stm32f4xx_pwr.h"
+void RTC_WKUP_IRQHandler(void)
+{
+  if (RTC_GetITStatus(RTC_IT_WUT) != RESET) {
+    EXTI_ClearITPendingBit(EXTI_Line22);
+    RTC_ClearITPendingBit(RTC_IT_WUT);
+    RTC_ClearFlag(RTC_FLAG_WUTF);
+  }
+}
+#endif
+
+static void USART_IRQHandler(USART_TypeDef *USART, IOEventFlags device) {
   if(USART_GetITStatus(USART, USART_IT_RXNE) != RESET) {
      /* Clear the USART Receive interrupt */
      USART_ClearITPendingBit(USART, USART_IT_RXNE);
@@ -329,7 +342,7 @@ void USART6_IRQHandler(void) {
 #endif
 
 
-static inline void SPI_IRQHandler(SPI_TypeDef *SPIx, IOEventFlags device) {
+static void SPI_IRQHandler(SPI_TypeDef *SPIx, IOEventFlags device) {
    while (SPI_I2S_GetITStatus(SPIx, SPI_I2S_IT_RXNE) != RESET) {
       // Read one byte/word from the receive data register
       jshSPIPush(device, SPI_I2S_ReceiveData(SPIx));
